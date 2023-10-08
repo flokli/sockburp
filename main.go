@@ -36,6 +36,11 @@ func main() {
 		log.WithError(err).Fatal("failed to listen")
 	}
 
+	// chmod the socket file to be world-accessible
+	if err := os.Chmod(cli.ListenAddr, 0777); err != nil {
+		log.WithError(err).Fatal("failed to chmod socket")
+	}
+
 	conns := make(chan net.Conn, 32)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
