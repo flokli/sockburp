@@ -30,6 +30,13 @@ func main() {
 	}
 	log.SetLevel(logLevel)
 
+	// If the socket file already exists, remove it first
+	if _, err := os.Stat(cli.ListenAddr); err == nil {
+		if err := os.Remove(cli.ListenAddr); err != nil {
+			log.WithError(err).Warn("unable to delete socket file")
+		}
+	}
+
 	log.Infof("Listening on %s", cli.ListenAddr)
 
 	l, err := net.Listen("unix", cli.ListenAddr)
