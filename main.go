@@ -15,11 +15,14 @@ import (
 )
 
 var cli struct {
-	LogLevel         string `enum:"trace,debug,info,warn,error,fatal,panic" help:"The log level to log with" default:"info"`
-	ListenAddr       string `name:"listen-address" help:"The path of the unix domain socket to listen on" arg:""`
-	FirstRemoteAddr  string `name:"first-remote-address" help:"The first (and authoritative) socket address to forward requests to"`
-	SecondRemoteAddr string `name:"second-remote-address" help:"The second socket address responses are compared against"`
+	LogLevel          string `enum:"trace,debug,info,warn,error,fatal,panic" help:"The log level to log with" default:"info"`
+	ListenAddr        string `name:"listen-address" help:"The path of the unix domain socket to listen on" arg:""`
+	FirstRemoteAddr   string `name:"first-remote-address" help:"The first (and authoritative) socket address to forward requests to"`
+	SecondRemoteAddr  string `name:"second-remote-address" help:"The second socket address responses are compared against"`
+	PcapPathOutliners string `name:"pcap-path" type:"path" help:"Path to a .pcap file where differing responses (and the original request) are written to."`
 }
+
+var pcapWriter *PcapWriter
 
 func main() {
 	_ = kong.Parse(&cli, kong.Description("Duplicate requests received over unix sockets and send them to two backends"))
@@ -47,6 +50,22 @@ func main() {
 	// chmod the socket file to be world-accessible
 	if err := os.Chmod(cli.ListenAddr, 0777); err != nil {
 		log.WithError(err).Fatal("failed to chmod socket")
+	}
+
+	// if a path to a pcap file is set, set up the writer
+	if cli.PcapPathOutliners != "" {
+		pcapF, err := os.Create(cli.PcapPathOutliners)
+		if err != nil {
+			log.WithError(err).Fatal("unable to open pcap file")
+		}
+		defer pcapF.Close()
+
+		// update the pcapWriter global
+		pcapWriter, err = NewPcapWriter(pcapF)
+		if err != nil {
+			log.WithError(err).Fatal("unable to open pcap writer")
+		}
+		defer pcapWriter.Close()
 	}
 
 	conns := make(chan net.Conn, 32)
@@ -163,6 +182,17 @@ func handleConn(conn net.Conn) error {
 	// compare the output from the first with the second and log an error if they mismatch.
 	if !bytes.Equal(resp1.Bytes(), resp2.Bytes()) {
 		log.WithField("resp1", fmt.Sprintf("%X", resp1.Bytes())).WithField("resp2", fmt.Sprintf("%X", resp2.Bytes())).Error("response mismatch")
+
+		// if pcap is configured, write out the packet.
+		if pcapWriter != nil {
+			if err := pcapWriter.WritePacket(rq, resp1.Bytes(), resp2.Bytes()); err != nil {
+				return fmt.Errorf("unable to write out pcap: %w", err)
+			}
+
+			if err := pcapWriter.Flush(); err != nil {
+				return fmt.Errorf("unable to flush pcap: %w", err)
+			}
+		}
 	}
 
 	return nil
