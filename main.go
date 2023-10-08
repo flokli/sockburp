@@ -139,9 +139,10 @@ func handleConn(conn net.Conn) error {
 	}
 
 	log.WithField("resp", fmt.Sprintf("%X", resp)).Info("replied")
+	_ = conn.Close()
 	_ = firstConn.Close()
 
-	// send the request to the second backend.
+	// dial to the second backend.
 	secondConn, err := net.Dial("unix", cli.SecondRemoteAddr)
 	if err != nil {
 		return fmt.Errorf("unable to connect to second backend: %w", err)
