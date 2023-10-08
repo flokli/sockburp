@@ -98,60 +98,56 @@ func handleConn(conn net.Conn) error {
 
 	log.Debug("received request")
 
-	// connect to backend
-	// TODO: check if we need to open new connections all the time or not
+	// connect to first backend.
 	firstConn, err := net.Dial("unix", cli.FirstRemoteAddr)
 	if err != nil {
 		return fmt.Errorf("unable to connect to first backend: %w", err)
 	}
 	defer firstConn.Close()
+
+	// send the request to the first backend.
+	if _, err := io.Copy(firstConn, bytes.NewReader(rq)); err != nil {
+		return fmt.Errorf("failed writing to first backend: %w", err)
+	}
+
+	// read the response.
+	var resp1 bytes.Buffer
+	if _, err := io.Copy(&resp1, firstConn); err != nil {
+		return fmt.Errorf("failed reading response from first backend: %w", err)
+	}
+
+	resp := resp1.Bytes()
+
+	// forward it to the client.
+	if _, err := io.Copy(conn, bytes.NewReader(resp)); err != nil {
+		return fmt.Errorf("failed writing response to client: %w", err)
+	}
+
+	log.WithField("resp", fmt.Sprintf("%X", resp)).Info("replied")
+	_ = firstConn.Close()
+
+	// send the request to the second backend.
 	secondConn, err := net.Dial("unix", cli.SecondRemoteAddr)
 	if err != nil {
 		return fmt.Errorf("unable to connect to second backend: %w", err)
 	}
 	defer secondConn.Close()
 
-	resp, err := sendAndCompare(rq, firstConn, secondConn)
-	if err != nil {
-		return fmt.Errorf("failure during sendAndCompare: %w", err)
-	}
-	log.WithField("resp", fmt.Sprintf("%X", resp)).Debugf("done invoking sendAndCompare")
-
-	return nil
-}
-
-// sends a request to two destinations, returns the response from the first one.
-// Internally compares the output from the first with the second and logs an
-// error if they mismatch.
-func sendAndCompare(rq []byte, first io.ReadWriter, second io.ReadWriter) ([]byte, error) {
-	// send the request to the first backend
-	if _, err := io.Copy(first, bytes.NewReader(rq)); err != nil {
-		return nil, fmt.Errorf("failed writing to first backend: %w", err)
+	// send the request to the second backend.
+	if _, err := io.Copy(secondConn, bytes.NewReader(rq)); err != nil {
+		return fmt.Errorf("unable to send request to second backend: %w", err)
 	}
 
-	// read the response from the first backend
-	var resp1 bytes.Buffer
-	if _, err := io.Copy(&resp1, first); err != nil {
-		return nil, fmt.Errorf("failed reading response from first backend: %w", err)
-	}
-
-	// send the request to the second backend. getting back an error is not fatal,
-	if _, err := io.Copy(second, bytes.NewReader(rq)); err != nil {
-		log.WithError(err).Warn("failed to send request to second backend")
-		return resp1.Bytes(), nil
-	}
-
-	// read the response from the second backend
+	// read the response from the second backend.
 	var resp2 bytes.Buffer
-	if _, err := io.Copy(&resp2, first); err != nil {
-		log.WithError(err).Warn("failed to send request to second backend")
-		return resp1.Bytes(), nil
+	if _, err := io.Copy(&resp2, secondConn); err != nil {
+		return fmt.Errorf("unable to read response from second backend: %w", err)
 	}
 
-	// If we're here, we have two responses to compare against.
+	// compare the output from the first with the second and log an error if they mismatch.
 	if !bytes.Equal(resp1.Bytes(), resp2.Bytes()) {
 		log.WithField("resp1", fmt.Sprintf("%X", resp1.Bytes())).WithField("resp2", fmt.Sprintf("%X", resp2.Bytes())).Error("response mismatch")
 	}
 
-	return resp1.Bytes(), nil
+	return nil
 }
