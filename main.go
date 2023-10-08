@@ -11,6 +11,7 @@ import (
 
 	"github.com/alecthomas/kong"
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/sync/errgroup"
 )
 
 var cli struct {
@@ -59,15 +60,22 @@ func main() {
 		}
 	}()
 
+	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(32)
+
 	// Main loop
 	for {
 		select {
 		case conn := <-conns:
-			defer conn.Close()
+			g.Go(func() error {
+				defer conn.Close()
 
-			if err := handleConn(conn); err != nil {
-				log.WithError(err).Error("error handling connection")
-			}
+				if err := handleConn(conn); err != nil {
+					log.WithError(err).Error("error handling connection")
+				}
+
+				return nil
+			})
 		case <-ctx.Done():
 			log.Info("Received interrupt, terminating")
 
